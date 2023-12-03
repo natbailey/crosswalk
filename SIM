@@ -47,6 +47,7 @@ CONSTANTS = {
 }
 
 PED_X_START = CONSTANTS["B"] + CONSTANTS["S"]
+PED_FULL_DISTANCE = PED_X_START + CONSTANTS["S"]
 CAR_FRONT_X_START = CONSTANTS["B"] * 3.5 + CONSTANTS["S"] * 3
 
 
@@ -93,6 +94,9 @@ class Pedestrian:
     def __init__(self, speed):
         self.speed = speed
         self.id = next(Pedestrian.idIter)
+
+    def setArrivalTime(self, time):
+        self.arrivalTime = time
 
 
 class Automobile:
@@ -153,6 +157,7 @@ def main():
         t = nextEvent.at
         if isinstance(nextEvent, PedArrival):
             print(f"{t}\tPedestrian {nextEvent.ped.id} arrived")
+            nextEvent.ped.setArrivalTime(t)
 
             # spawn next arrival and at button event
             if pedsGenerated < N:
@@ -171,6 +176,9 @@ def main():
             )
         elif isinstance(nextEvent, PedExit):
             print(f"{t}\tPedestrian {nextEvent.ped.id} exited")
+            minimumTime = PED_FULL_DISTANCE / nextEvent.ped.speed
+            actualTime = t - nextEvent.ped.arrivalTime
+            pedDelay.update(actualTime - minimumTime)
         elif isinstance(nextEvent, AutoArrival):
             print(f"{t}\tAutomobile {nextEvent.auto.id} arrived")
             activeAutos.append(nextEvent.auto)
@@ -210,6 +218,8 @@ def main():
                 )
                 safetySignal.pressButton()
                 print(f"{t}\tWaiting pedestrians pushed the button")
+
+    print(f"Average pedestrian delay: {pedDelay.mean()}")
 
     for random in randomGenerators:
         random.close()
