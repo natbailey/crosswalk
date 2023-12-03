@@ -39,8 +39,8 @@ CONSTANTS = {
     "lA": 4 / 60,
     "L": 9,
     "a": 10,
-    "vjLow": 25,
-    "vjHigh": 35,
+    "vjLow": 25 * 5280 / 3600,
+    "vjHigh": 35 * 5280 / 3600,
     "vkLow": 2.6,
     "vkHigh": 4.1,
     "X": 20,
@@ -48,7 +48,8 @@ CONSTANTS = {
 
 PED_X_START = CONSTANTS["B"] + CONSTANTS["S"]
 PED_FULL_DISTANCE = PED_X_START + CONSTANTS["S"]
-CAR_FRONT_X_START = CONSTANTS["B"] * 3.5 + CONSTANTS["S"] * 3
+AUTO_FRONT_X_START = CONSTANTS["B"] * 3.5 + CONSTANTS["S"] * 3
+AUTO_FULL_DISTANCE = CONSTANTS["B"] * 7 + CONSTANTS["S"] * 6
 
 
 class WalkSignal(Enum):
@@ -104,8 +105,11 @@ class Automobile:
 
     def __init__(self, speed):
         self.speed = speed
-        self.position = CAR_FRONT_X_START
+        self.delayed = False
         self.id = next(Automobile.idIter)
+
+    def setArrivalTime(self, time):
+        self.arrivalTime = time
 
 
 def main():
@@ -174,6 +178,19 @@ def main():
                 events,
                 crossingPeds,
             )
+        elif isinstance(nextEvent, PedImpatient):
+            if nextEvent.ped in waitingPeds:
+                print(
+                    f"{t}\tPedestrian {nextEvent.ped.id} got impatient and pushed the button"
+                )
+                if not safetySignal.buttonPressed:
+                    heapq.heappush(
+                        events,
+                        GreenExpires(
+                            t
+                            + max(CONSTANTS["GREEN"] - (t - safetySignal.greenInit), 0)
+                        ),
+                    )
         elif isinstance(nextEvent, PedExit):
             print(f"{t}\tPedestrian {nextEvent.ped.id} exited")
             minimumTime = PED_FULL_DISTANCE / nextEvent.ped.speed
@@ -181,15 +198,65 @@ def main():
             pedDelay.update(actualTime - minimumTime)
         elif isinstance(nextEvent, AutoArrival):
             print(f"{t}\tAutomobile {nextEvent.auto.id} arrived")
+            nextEvent.auto.setArrivalTime(t)
             activeAutos.append(nextEvent.auto)
+            heapq.heappush(
+                events,
+                AutoExit(
+                    t + AUTO_FULL_DISTANCE / nextEvent.auto.speed, nextEvent.auto, False
+                ),
+            )
+
+            # If light is yellow, check if delayed
+            if safetySignal.trafficSignal == TrafficSignal.YELLOW:
+                if willAutoBeDelayed(nextEvent.auto, t, t - safetySignal.yellowInit):
+                    nextEvent.auto.delayed = True
+                    heapq.heappush(
+                        events,
+                        AutoExit(
+                            nextEvent.auto.arrivalTime
+                            + calculateDelayedTime(nextEvent.auto, safetySignal),
+                            nextEvent.auto,
+                            True,
+                        ),
+                    )
 
             if autosGenerated < N:
                 heapq.heappush(events, nextAutoArrival(t, autoRandom))
                 autosGenerated += 1
+        elif isinstance(nextEvent, AutoExit):
+            if not nextEvent.delayed:
+                if not nextEvent.auto.delayed:
+                    print(f"{t}\tAutomobile {nextEvent.auto.id} exited")
+                    for i in range(len(activeAutos)):
+                        if activeAutos[i].id == nextEvent.auto.id:
+                            activeAutos.pop(i)
+                            break
+                    autoDelay.update(0)
+            else:
+                print(f"{t}\tAutomobile {nextEvent.auto.id} exited after a delay")
+                delay = t - (
+                    (AUTO_FULL_DISTANCE / nextEvent.auto.speed)
+                    + nextEvent.auto.arrivalTime
+                )
+                autoDelay.update(delay)
         elif isinstance(nextEvent, GreenExpires):
             print(f"{t}\tGreen expired")
             heapq.heappush(events, YellowExpires(t + CONSTANTS["YELLOW"]))
             safetySignal.setYellow(t)
+
+            # Figure out which autos are delayed
+            for auto in activeAutos:
+                if willAutoBeDelayed(auto, t, 0):
+                    auto.delayed = True
+                    heapq.heappush(
+                        events,
+                        AutoExit(
+                            auto.arrivalTime + calculateDelayedTime(auto, safetySignal),
+                            auto,
+                            True,
+                        ),
+                    )
         elif isinstance(nextEvent, YellowExpires):
             print(f"{t}\tYellow expired")
             heapq.heappush(events, RedExpires(t + CONSTANTS["RED"]))
@@ -218,8 +285,14 @@ def main():
                 )
                 safetySignal.pressButton()
                 print(f"{t}\tWaiting pedestrians pushed the button")
+            # Regardless of if they pushed the button or not, we set their
+            # impatience timer events
+            for ped in waitingPeds:
+                heapq.heappush(events, PedImpatient(t + 60, ped))
 
-    print(f"Average pedestrian delay: {pedDelay.mean()}")
+    print(f"OUTPUT\t{autoDelay.mean()}")
+    print(f"OUTPUT\t{autoDelay.variance()}")
+    print(f"OUTPUT\t{pedDelay.mean()}")
 
     for random in randomGenerators:
         random.close()
@@ -261,6 +334,7 @@ def handlePedReachesButton(
         else:
             print("")
         waitingPeds.append(nextEvent.ped)
+        heapq.heappush(events, PedImpatient(t + 60, nextEvent.ped))
     else:
         if len(crossingPeds) < CONSTANTS["X"]:
             if canPedMakeIt(nextEvent.ped, t - safetySignal.redInit):
@@ -285,6 +359,37 @@ def canPedMakeIt(ped, redTimeSoFar):
 def nextAutoArrival(t, autoRandom):
     auto = Automobile(autoRandom.uniform(CONSTANTS["vjLow"], CONSTANTS["vjHigh"]))
     return AutoArrival(t + autoRandom.exponential(1 / (2 * CONSTANTS["lA"])), auto)
+
+
+def willAutoBeDelayed(auto, t, yellowTimeSoFar):
+    timeUntilRed = CONSTANTS["YELLOW"] - yellowTimeSoFar
+    timeUntilGreen = timeUntilRed + CONSTANTS["RED"]
+    autoCurrentFrontX = AUTO_FRONT_X_START - auto.speed * (t - auto.arrivalTime)
+    autoCurrentBackX = autoCurrentFrontX + CONSTANTS["L"]
+    if (
+        timeUntilRed > 0
+        and autoCurrentBackX - auto.speed * timeUntilRed < -CONSTANTS["w"] / 2
+    ):
+        return False
+    else:
+        return not autoCurrentFrontX - auto.speed * timeUntilGreen > CONSTANTS["w"] / 2
+
+
+def calculateDelayedTime(auto, safetySignal):
+    bj = (auto.speed**2) / (2 * CONSTANTS["a"])
+    tj = auto.speed / CONSTANTS["a"]
+
+    interval1 = (AUTO_FULL_DISTANCE - 2 * bj) / auto.speed
+    interval2 = 2 * tj
+    hj = (
+        auto.arrivalTime
+        + (((AUTO_FULL_DISTANCE / 2) - (CONSTANTS["w"] / 2) - bj) / auto.speed)
+        + tj
+    )
+    gb = safetySignal.yellowInit + CONSTANTS["YELLOW"] + CONSTANTS["RED"]
+    interval3 = gb - hj
+
+    return interval1 + interval2 + interval3
 
 
 if __name__ == "__main__":

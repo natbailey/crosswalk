@@ -37,7 +37,10 @@ class AutoArrival(Event):
 
 
 class AutoExit(Event):
-    pass
+    def __init__(self, at, auto, delayed):
+        self.auto = auto
+        self.delayed = delayed
+        super().__init__(at)
 
 
 class GreenExpires(Event):
