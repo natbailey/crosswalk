@@ -1,0 +1,13 @@
+"Use Welford's Equations" is satisfied in the class defined in src/welford.py which is
+used on lines 142-143 and 293-295 of src/main.py
+
+"Use an Exponential(u) random variate" is satisfied in the class defined in 
+src/fileRandom.py which is used on lines 303 and 361 of src/main.py
+
+"Do not generate N arrival times at one time" is satisfied in lines 168 and 225 of
+src/main.py where I only generate the next arrival once the previous one has occurred
+
+"Do not use a simple list for your discrete event prioritized 'event list'" is satisfied
+on lines 154 and 156 of src/main.py, as well as every other line where heapq.heappush
+or heapq.heappop are called, as these python library functions use a min-heap data
+structure backed by a list, making insertion O(1) average and extraction O(log(n))
